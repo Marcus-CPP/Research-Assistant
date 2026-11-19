@@ -143,117 +143,134 @@ def check_edge_weights_uniqueness(G, vertex_labels, edge_labels):
     return True, ""
 
 @st.cache_data(show_spinner=False)
-def compute_dynamic_svg_positions(edges_tuple, num_vertices, width=1600, height=450):
-    
+def compute_dynamic_svg_positions(edges_tuple, num_vertices, r_vertex=18.0):
     G = nx.Graph()
     G.add_nodes_from(range(num_vertices))
     G.add_edges_from(edges_tuple)
-    
-    # 1. Pure geometric layout (no physics simulation that alters topology)
-    n = max(len(G.nodes), 1)
-    if n <= 30:
-        edge_length_factor=1.2
-    elif n <= 50:
-        edge_length_factor = 1.5
-    elif n <= 70:
-        edge_length_factor = 1.9
+
+    if num_vertices == 0:
+        return {}, 0, 0, {}, (0, 0, 1600, 450)
+    if num_vertices == 1:
+        pad = r_vertex * 4
+        return {0: (0.0, 0.0)}, 0.0, 0.0, {0: 'center'}, (-pad, -pad, pad * 2, pad * 2)
+
+    # 1. Compute base topology layout (Kamada-Kawai for small/medium, Spring for large n)
+    if num_vertices <= 150:
+        raw_pos = nx.kamada_kawai_layout(G)
     else:
-        edge_length_factor = 2.2
+        raw_pos = nx.spring_layout(G, k=1.0 / math.sqrt(num_vertices), iterations=100, seed=42)
 
-    pos = nx.kamada_kawai_layout(G)
-    
-    padding_x = 80
-    padding_y = 60
-    cx, cy = width / 2, height / 2
-    
-    if len(pos) == 0: return {}, cx, cy, {}, (0, 0, width, height)
+    nodes = list(raw_pos.keys())
+    coords = {u: [float(raw_pos[u][0]), float(raw_pos[u][1])] for u in nodes}
 
-    xs = [p[0] for p in pos.values()]
-    ys = [p[1] for p in pos.values()]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-    
-    range_x = max(1e-5, max_x - min_x)
-    range_y = max(1e-5, max_y - min_y)
-    
-    # Aspect-ratio preserving base scale
-    avail_w = width - 2 * padding_x
-    avail_h = height - 2 * padding_y
-    scale = min(avail_w / range_x, avail_h / range_y)
-    
-    center_x = min_x + range_x / 2
-    center_y = min_y + range_y / 2
-    
-    scaled_pos = {}
-    col_types = {}
-    for node, (x, y) in pos.items():
-        # Pure geometric scalar multiplication preserves exact graph pattern
-        sx = cx + (x - center_x) * scale * edge_length_factor
-        sy = cy + (y - center_y) * scale * edge_length_factor
-        scaled_pos[node] = (sx, sy)
-        col_types[node] = 'center'
-            
-    # Compute new viewBox to ensure everything is visible and centered
-    final_xs = [p[0] for p in scaled_pos.values()]
-    final_ys = [p[1] for p in scaled_pos.values()]
-    
-    vb_min_x = min(final_xs) - padding_x
-    vb_max_x = max(final_xs) + padding_x
-    vb_min_y = min(final_ys) - padding_y
-    vb_max_y = max(final_ys) + padding_y
-    
+    # 2. Scale world space by nearest-neighbor distance rather than a fixed pixel box
+    nn_dists = []
+    for i, u in enumerate(nodes):
+        ux, uy = coords[u]
+        min_d = float('inf')
+        for j, v in enumerate(nodes):
+            if i == j:
+                continue
+            d = math.hypot(ux - coords[v][0], uy - coords[v][1])
+            if d < min_d:
+                min_d = d
+        if min_d < float('inf'):
+            nn_dists.append(min_d)
+
+    nn_dists.sort()
+    ref_dist = nn_dists[max(0, len(nn_dists) // 4)] if nn_dists else 1.0
+    target_nn_dist = r_vertex * 3.8  # Comfortable spacing between connected/nearby nodes
+    scale = target_nn_dist / max(ref_dist, 1e-5)
+
+    for u in nodes:
+        coords[u][0] *= scale
+        coords[u][1] *= scale
+
+    # 3. Fast sweep-and-prune collision resolution so no two vertex circles ever overlap
+    min_sep = r_vertex * 2.7  # Guarantees clear gap outside circle borders
+    for _ in range(60):
+        sorted_nodes = sorted(nodes, key=lambda u: coords[u][0])
+        moved = False
+        for i in range(len(sorted_nodes)):
+            u = sorted_nodes[i]
+            ux, uy = coords[u]
+            for j in range(i + 1, len(sorted_nodes)):
+                v = sorted_nodes[j]
+                dx = coords[v][0] - ux
+                if dx >= min_sep:
+                    break  # Remaining nodes are farther away on X-axis
+                dy = coords[v][1] - uy
+                dist = math.hypot(dx, dy)
+                if dist < min_sep:
+                    moved = True
+                    if dist < 1e-4:
+                        angle = (u * 2.39996) % (2 * math.pi)
+                        nx_dir, ny_dir = math.cos(angle), math.sin(angle)
+                    else:
+                        nx_dir, ny_dir = dx / dist, dy / dist
+                    push = (min_sep - dist) * 0.5
+                    coords[u][0] -= nx_dir * push
+                    coords[u][1] -= ny_dir * push
+                    coords[v][0] += nx_dir * push
+                    coords[v][1] += ny_dir * push
+        if not moved:
+            break
+
+    scaled_pos = {u: (coords[u][0], coords[u][1]) for u in nodes}
+    col_types = {u: 'center' for u in nodes}
+
+    xs = [p[0] for p in scaled_pos.values()]
+    ys = [p[1] for p in scaled_pos.values()]
+    padding = r_vertex * 3.0
+
+    vb_min_x = min(xs) - padding
+    vb_max_x = max(xs) + padding
+    vb_min_y = min(ys) - padding
+    vb_max_y = max(ys) + padding
+
     vb_w = vb_max_x - vb_min_x
     vb_h = vb_max_y - vb_min_y
-    
+    cx = (vb_min_x + vb_max_x) / 2.0
+    cy = (vb_min_y + vb_max_y) / 2.0
 
     return scaled_pos, cx, cy, col_types, (vb_min_x, vb_min_y, vb_w, vb_h)
 
-def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy, col_types, vb, show_labels=True, show_wt=True, width=1600, height=450):
-    n = max(len(G.nodes), 1)
-    
-    # Tiered shrink rate (m) based on graph size
-    if n <= 30:
-        m = 0.85
-    elif n <= 50:
-        m = 0.7
-    elif n <= 80:
-        m = 0.68
-    elif n <= 100:
-        m = 0.6
-    elif n <= 350:
-        m = 0.3
-    else:
-        m = 0.15
-    V = m * 22.0
 
-    font_val = max(6.0, 0.75 * V)
-    font_idx = max(5.0, 0.65 * V)
-    font_edge = max(6.0, 0.75 * V)
-    font_sum = max(3.0, 0.50 * V)
-    r_sum = max(4.0, font_sum * 1.15)
-    stroke_width = max(1.2, 2.0 * m)
-    
-    # Revert r_dot back to a small dot
-    r_dot = max(2.5, 4.0 * m)  # Small dot size
+def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy, col_types, vb, show_labels=True, show_wt=True, width=1600, height=450):
+    r_vertex = 18.0  # Fixed world-space radius for clear outer vertex circles
+
+    # Auto-fit font size to the widest vertex label so digits never cross the circle border
+    max_v_val = max(vertex_labels.values()) if vertex_labels else 0
+    max_digits = max(1, len(str(max_v_val)))
+    inner_chord = r_vertex * 1.72
+    font_val = min(14.5, inner_chord / (0.62 * max_digits))
+
+    font_idx = 11.0
+    font_edge = 12.5
+    font_sum = 9.5
+    r_sum = 10.5
+    stroke_width = 1.8
 
     vb_x, vb_y, vb_w, vb_h = vb
+    # Estimate initial screen-to-world zoom ratio to hide clutter when zoomed far out on large graphs
+    initial_screen_scale = min(width / max(vb_w, 1.0), height / max(vb_h, 1.0))
+    hide_text_initially = initial_screen_scale < 0.42
+    initial_lod_class = "lod-hidden" if hide_text_initially else ""
+
     svg = f'<svg id="graph-svg" viewBox="{vb_x} {vb_y} {vb_w} {vb_h}" width="100%" height="{height}" xmlns="http://www.w3.org/2000/svg" style="background-color: #ffffff; border-radius: 8px; cursor: grab;">\n'
     svg += '  <defs>\n    <style>\n'
-    
-    # CSS Updates for Inverse Colors
-    svg += f'      .v-point {{ stroke: #ffffff; stroke-width: 1px; }}\n'
-    # Use stroke to create white halo around vertex labels
-    svg += f'      .v-val-text {{ font-family: sans-serif; font-size: {font_val}px; font-weight: bold; fill: #ffffff; dominant-baseline: central; text-anchor: middle; pointer-events: none; paint-order: stroke fill; stroke-width: {max(2.0, font_val * 0.2)}px; stroke-linecap: round; stroke-linejoin: round; }}\n'
-    svg += f'      .v-idx-text {{ font-family: sans-serif; font-size: {font_idx}px; font-weight: bold; fill: #555555; dominant-baseline: central; }}\n'
-    svg += f'      .e-line {{ stroke: #000000; stroke-width: {stroke_width}; fill: none; opacity: 0.15}}\n'
-    
-    # Edge text uses SVG "paint-order" to draw a thick white halo around the letters, rendering it perfectly over lines
-    svg += f'      .e-text {{ font-family: sans-serif; font-size: {font_edge}px; font-weight: bold; text-anchor: middle; dominant-baseline: central; paint-order: stroke fill; stroke: #ffffff; stroke-width: {max(2.5, font_edge * 0.25)}px; stroke-linecap: round; stroke-linejoin: round; }}\n'
-    svg += f'      .e-sum-text {{ font-family: sans-serif; font-size: {font_sum}px; font-weight: bold; fill: #b22222; text-anchor: middle; dominant-baseline: central; }}\n'
-    svg += f'      .e-sum-circle {{ fill: #ffffff; stroke: #b22222; stroke-width: {max(0.8, 1.2 * m)}; }}\n'
+    svg += f'      .v-circle {{ stroke-width: 2.2px; }}\n'
+    svg += f'      .v-val-text {{ font-family: sans-serif; font-size: {font_val:.2f}px; font-weight: bold; dominant-baseline: central; text-anchor: middle; pointer-events: none; transition: opacity 0.15s; }}\n'
+    svg += f'      .v-idx-text {{ font-family: sans-serif; font-size: {font_idx}px; font-weight: bold; fill: #555555; dominant-baseline: central; pointer-events: none; transition: opacity 0.15s; }}\n'
+    svg += f'      .e-line {{ stroke: #000000; stroke-width: {stroke_width}; fill: none; opacity: 0.22; }}\n'
+    svg += f'      .e-text {{ font-family: sans-serif; font-size: {font_edge}px; font-weight: bold; text-anchor: middle; dominant-baseline: central; paint-order: stroke fill; stroke: #ffffff; stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: opacity 0.15s; }}\n'
+    svg += f'      .e-sum-text {{ font-family: sans-serif; font-size: {font_sum}px; font-weight: bold; fill: #b22222; text-anchor: middle; dominant-baseline: central; pointer-events: none; }}\n'
+    svg += f'      .e-sum-circle {{ fill: #ffffff; stroke: #b22222; stroke-width: 1.2px; }}\n'
+    svg += f'      .lod-item {{ transition: opacity 0.15s; }}\n'
+    svg += f'      .lod-hidden {{ opacity: 0 !important; }}\n'
     svg += '    </style>\n  </defs>\n'
     svg += '  <g id="maingroup">\n    <g id="edges">\n'
-        
+
     for u, v in G.edges():
         x1, y1 = pos[u]
         x2, y2 = pos[v]
@@ -261,58 +278,66 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
         lbl_u = vertex_labels.get(u, 0)
         lbl_v = vertex_labels.get(v, 0)
         sum_val = lbl_u + lbl_e + lbl_v
-        
+
         edge_color = "#d9513c" if lbl_e == res_value and res_value > 0 else "#0011FF"
         svg += f'      <line class="e-line" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" />\n'
-        
-        # Calculate EXACT midpoint of the edge
+
         mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
         dx, dy = x2 - x1, y2 - y1
-        length = math.sqrt(dx * dx + dy * dy)
+        length = math.hypot(dx, dy)
         nx_val, ny_val = (-dy / length, dx / length) if length > 0 else (0, -1)
-        
-        # Place Edge Label at midpoint
-        svg += f'      <text class="e-text" x="{mx}" y="{my}" fill="{edge_color}">{lbl_e}</text>\n'
-        
+
+        svg += f'      <text class="e-text lod-item {initial_lod_class}" x="{mx}" y="{my}" fill="{edge_color}">{lbl_e}</text>\n'
+
         if show_wt:
-            # Offset the edge weight perpendicularly from the midpoint
-            offset_sum = (font_edge * 0.8) + r_sum
+            offset_sum = (font_edge * 0.85) + r_sum
             sx = mx + nx_val * offset_sum
             sy = my + ny_val * offset_sum
-            svg += f'      <circle class="e-sum-circle" cx="{sx}" cy="{sy}" r="{r_sum}" />\n'
-            svg += f'      <text class="e-sum-text" x="{sx}" y="{sy}">{sum_val}</text>\n'
-            
+            svg += f'      <g class="lod-item {initial_lod_class}">\n'
+            svg += f'        <circle class="e-sum-circle" cx="{sx}" cy="{sy}" r="{r_sum}" />\n'
+            svg += f'        <text class="e-sum-text" x="{sx}" y="{sy}">{sum_val}</text>\n'
+            svg += '      </g>\n'
+
     svg += '    </g>\n    <g id="vertices">\n'
     for node, (x, y) in pos.items():
         v_val = vertex_labels.get(node, 0)
-        
-        # Vertex highlights red if it equals the maximum absolute res_value
-        vertex_color = "#d9513c" if v_val == res_value and res_value > 0 else "#222222"
-        
-        # Small dot serving as the background
-        svg += f'      <circle class="v-point" cx="{x}" cy="{y}" r="{r_dot}" fill="{vertex_color}" />\n'
-        
-        # Place vertex label EXACTLY on the dot. 
-        # The text is white, with a stroke matching the dot color in case it overflows the dot slightly.
-        svg += f'      <text class="v-val-text" x="{x}" y="{y}" stroke="{vertex_color}">{v_val}</text>\n'
-        
+        is_max = (v_val == res_value and res_value > 0)
+
+        # Distinct outer circle with solid fill so edge lines terminate cleanly at the perimeter
+        circle_fill = "#d9513c" if is_max else "#ffffff"
+        circle_stroke = "#a63221" if is_max else "#222222"
+        text_fill = "#ffffff" if is_max else "#111111"
+
+        svg += f'      <circle class="v-circle" cx="{x}" cy="{y}" r="{r_vertex}" fill="{circle_fill}" stroke="{circle_stroke}" />\n'
+        svg += f'      <text class="v-val-text lod-item {initial_lod_class}" x="{x}" y="{y}" fill="{text_fill}">{v_val}</text>\n'
+
         if show_labels:
-            # Tuck the node index beneath the dot
-            offset_idx = r_dot + (font_idx * 1.1)
-            svg += f'      <text class="v-idx-text" x="{x}" y="{y + offset_idx}" text-anchor="middle">({node})</text>\n'
-                
+            offset_idx = r_vertex + (font_idx * 0.95)
+            svg += f'      <text class="v-idx-text lod-item {initial_lod_class}" x="{x}" y="{y + offset_idx}" text-anchor="middle">({node})</text>\n'
+
     svg += '    </g>\n  </g>\n</svg>\n'
-    
+
     html_with_js = f"""
     {svg}
     <script src="https://d3js.org/d3.v7.min.js"></script>
     <script>
         const svgElement = d3.select("#graph-svg");
         const gElement = svgElement.select("#maingroup");
+        const baseScale = {initial_screen_scale:.6f};
+
         const zoom = d3.zoom()
-            .scaleExtent([0.02, 100])
-            .on("zoom", (event) => {{ gElement.attr("transform", event.transform); }});
+            .scaleExtent([0.05, 50])
+            .on("zoom", (event) => {{
+                gElement.attr("transform", event.transform);
+                // Effective pixel size on screen determines whether labels are readable
+                const effectiveScale = baseScale * event.transform.k;
+                svgElement.selectAll(".lod-item").classed("lod-hidden", effectiveScale < 0.42);
+            }});
+
         svgElement.call(zoom);
+        svgElement.on("dblclick.zoom", () => {{
+            svgElement.transition().duration(300).call(zoom.transform, d3.zoomIdentity);
+        }});
     </script>
     """
     return html_with_js
@@ -325,6 +350,39 @@ canvas_height = 450
 
 if "edges_input_val" not in st.session_state:
     st.session_state.edges_input_val = "0 1\n0 2\n0 3\n1 4\n1 5"
+if "rand_n_box" not in st.session_state:
+    st.session_state.rand_n_box = ""  # Keeps the "Random" placeholder on initial load
+if "gen_error" not in st.session_state:
+    st.session_state.gen_error = ""
+
+def parse_edges(edges_str):
+    parsed = []
+    max_v = -1
+    for line in edges_str.strip().split('\n'):
+        if line.strip():
+            u, v = map(int, line.split())
+            parsed.append((u, v))
+            max_v = max(max_v, u, v)
+    n = max_v + 1 if max_v >= 0 else 0
+    return parsed, n
+
+def on_generate_click():
+    raw_val = st.session_state.rand_n_box.strip()
+    try:
+        n_val = int(raw_val) if raw_val else random.randint(5, 30)
+        n_val = max(2, min(n_val, 500))
+        st.session_state.edges_input_val = generate_random_tree_string(n_val)
+        st.session_state.rand_n_box = str(n_val)
+        st.session_state.gen_error = ""
+    except ValueError:
+        st.session_state.gen_error = "Invalid integer"
+
+def on_edges_change():
+    try:
+        _, n = parse_edges(st.session_state.edges_input_val)
+        st.session_state.rand_n_box = str(n) if n > 0 else ""
+    except ValueError:
+        pass
 
 with st.sidebar:
     st.header("Graph Parameters")
@@ -333,21 +391,23 @@ with st.sidebar:
     rand_col1, rand_col2 = st.columns([1, 1.2])
     
     with rand_col1:
-        rand_n_input = st.text_input("Vertices (n)", placeholder="Random")
+        st.text_input("Vertices (n)", key="rand_n_box", placeholder="Random")
         
     with rand_col2:
         st.markdown("<div style='margin-top: 28px;'></div>", unsafe_allow_html=True)
-        if st.button("Generate", use_container_width=True):
-            try:
-                n_val = int(rand_n_input.strip()) if rand_n_input.strip() else random.randint(5, 30)
-                n_val = max(2, min(n_val, 500))
-                st.session_state.edges_input_val = generate_random_tree_string(n_val)
-            except ValueError:
-                st.error("Invalid integer")
+        st.button("Generate", use_container_width=True, on_click=on_generate_click)
+        
+    if st.session_state.gen_error:
+        st.error(st.session_state.gen_error)
                 
     st.markdown("---")
     
-    edges_input = st.text_area("Edges (u v per line, zero-indexed)", key="edges_input_val", height=250)
+    edges_input = st.text_area(
+        "Edges (u v per line, zero-indexed)",
+        key="edges_input_val",
+        height=250,
+        on_change=on_edges_change
+    )
     
     st.components.v1.html("""
         <script>
@@ -365,19 +425,13 @@ with st.sidebar:
     """, height=0, width=0)
 
 edges = []
-max_vertex_index = -1
+num_vertices = 0
 try:
-    for line in edges_input.strip().split('\n'):
-        if line.strip():
-            u, v = map(int, line.split())
-            edges.append((u, v))
-            max_vertex_index = max(max_vertex_index, u, v)
+    edges, num_vertices = parse_edges(edges_input)
 except ValueError:
     st.sidebar.error("Invalid edge format.")
 
 edges_tuple = tuple(edges)
-num_vertices = max_vertex_index + 1 if max_vertex_index >= 0 else 0
-st.sidebar.markdown(f"**Detected Vertices (n):** `{num_vertices}`")
 
 G = nx.Graph()
 G.add_nodes_from(range(num_vertices))
@@ -409,8 +463,7 @@ with controls_container:
         st.metric(label="Theoretical res(G) [k parameter]", value=theoretical_res)
 
 is_valid_labeling, error_msg = check_edge_weights_uniqueness(G, vertex_labels, edge_labels)
-pos, cx, cy, col_types, vb = compute_dynamic_svg_positions(edges_tuple, num_vertices, width=canvas_width, height=canvas_height)
-
+pos, cx, cy, col_types, vb = compute_dynamic_svg_positions(edges_tuple, num_vertices)
 html_code = generate_visualgo_svg(
     G, pos, vertex_labels, edge_labels, res_value, cx, cy, col_types, vb,
     show_labels=show_labels, show_wt=show_wt, width=canvas_width, height=canvas_height
