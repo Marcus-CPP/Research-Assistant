@@ -259,11 +259,11 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
 
     svg = f'<svg id="graph-svg" viewBox="{vb_x} {vb_y} {vb_w} {vb_h}" width="100%" height="{height}" xmlns="http://www.w3.org/2000/svg" style="background-color: #ffffff; border-radius: 8px; cursor: grab;">\n'
     svg += '  <defs>\n    <style>\n'
-    svg += f'      .v-circle {{ stroke-width: 2.2px; }}\n'
-    svg += f'      .v-val-text {{ font-family: sans-serif; font-size: {font_val:.2f}px; font-weight: bold; dominant-baseline: central; text-anchor: middle; pointer-events: none; transition: opacity 0.15s; }}\n'
+    svg += f'      .v-circle {{ fill: #ffffff; stroke: #222222; stroke-width: 2.2px; }}\n'
+    svg += f'      .v-val-text {{ font-family: sans-serif; font-size: {font_val:.2f}px; font-weight: bold; fill: #000000; dominant-baseline: central; text-anchor: middle; pointer-events: none; transition: opacity 0.15s; }}\n'
     svg += f'      .v-idx-text {{ font-family: sans-serif; font-size: {font_idx}px; font-weight: bold; fill: #555555; dominant-baseline: central; pointer-events: none; transition: opacity 0.15s; }}\n'
     svg += f'      .e-line {{ stroke: #000000; stroke-width: {stroke_width}; fill: none; opacity: 0.22; }}\n'
-    svg += f'      .e-text {{ font-family: sans-serif; font-size: {font_edge}px; font-weight: bold; text-anchor: middle; dominant-baseline: central; paint-order: stroke fill; stroke: #ffffff; stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: opacity 0.15s; }}\n'
+    svg += f'      .e-text {{ font-family: sans-serif; font-size: {font_edge}px; font-weight: bold; fill: #000000; text-anchor: middle; dominant-baseline: central; paint-order: stroke fill; stroke: #ffffff; stroke-width: 3.5px; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; transition: opacity 0.15s; }}\n'
     svg += f'      .e-sum-text {{ font-family: sans-serif; font-size: {font_sum}px; font-weight: bold; fill: #b22222; text-anchor: middle; dominant-baseline: central; pointer-events: none; }}\n'
     svg += f'      .e-sum-circle {{ fill: #ffffff; stroke: #b22222; stroke-width: 1.2px; }}\n'
     svg += f'      .lod-item {{ transition: opacity 0.15s; }}\n'
@@ -279,7 +279,6 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
         lbl_v = vertex_labels.get(v, 0)
         sum_val = lbl_u + lbl_e + lbl_v
 
-        edge_color = "#d9513c" if lbl_e == res_value and res_value > 0 else "#0011FF"
         svg += f'      <line class="e-line" x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" />\n'
 
         mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
@@ -287,7 +286,7 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
         length = math.hypot(dx, dy)
         nx_val, ny_val = (-dy / length, dx / length) if length > 0 else (0, -1)
 
-        svg += f'      <text class="e-text lod-item {initial_lod_class}" x="{mx}" y="{my}" fill="{edge_color}">{lbl_e}</text>\n'
+        svg += f'      <text class="e-text lod-item {initial_lod_class}" x="{mx}" y="{my}">{lbl_e}</text>\n'
 
         if show_wt:
             offset_sum = (font_edge * 0.85) + r_sum
@@ -301,15 +300,9 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
     svg += '    </g>\n    <g id="vertices">\n'
     for node, (x, y) in pos.items():
         v_val = vertex_labels.get(node, 0)
-        is_max = (v_val == res_value and res_value > 0)
 
-        # Distinct outer circle with solid fill so edge lines terminate cleanly at the perimeter
-        circle_fill = "#d9513c" if is_max else "#ffffff"
-        circle_stroke = "#a63221" if is_max else "#222222"
-        text_fill = "#ffffff" if is_max else "#111111"
-
-        svg += f'      <circle class="v-circle" cx="{x}" cy="{y}" r="{r_vertex}" fill="{circle_fill}" stroke="{circle_stroke}" />\n'
-        svg += f'      <text class="v-val-text lod-item {initial_lod_class}" x="{x}" y="{y}" fill="{text_fill}">{v_val}</text>\n'
+        svg += f'      <circle class="v-circle" cx="{x}" cy="{y}" r="{r_vertex}" />\n'
+        svg += f'      <text class="v-val-text lod-item {initial_lod_class}" x="{x}" y="{y}">{v_val}</text>\n'
 
         if show_labels:
             offset_idx = r_vertex + (font_idx * 0.95)
