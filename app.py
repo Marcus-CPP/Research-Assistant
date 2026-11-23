@@ -104,6 +104,7 @@ def construct_and_evaluate_labeling(edges_tuple, num_vertices):
 
     return -1, {}, {}, {}
 
+# In Section 2 (ALGORITHMS & GENERATORS)
 def generate_random_tree_string(n):
     if n <= 1: return ""
     edges = []
@@ -115,7 +116,7 @@ def generate_random_tree_string(n):
     random.shuffle(labels)
     shuffled_edges = [(labels[u], labels[v]) for u, v in edges]
     
-    return "\n".join([f"{u} {v}" for u, v in shuffled_edges])
+    return "\n".join([f"{u}-{v}" for u, v in shuffled_edges])
 
 # ==========================================
 # 3. VISUALIZATION HELPERS
@@ -341,8 +342,9 @@ def generate_visualgo_svg(G, pos, vertex_labels, edge_labels, res_value, cx, cy,
 canvas_width = 1600
 canvas_height = 450
 
+# In Section 4 (MAIN APP LAYOUT & LOGIC)
 if "edges_input_val" not in st.session_state:
-    st.session_state.edges_input_val = "0 1\n0 2\n0 3\n1 4\n1 5"
+    st.session_state.edges_input_val = "0-1\n0-2\n0-3\n1-4\n1-5"
 if "rand_n_box" not in st.session_state:
     st.session_state.rand_n_box = ""  # Keeps the "Random" placeholder on initial load
 if "gen_error" not in st.session_state:
@@ -352,8 +354,12 @@ def parse_edges(edges_str):
     parsed = []
     max_v = -1
     for line in edges_str.strip().split('\n'):
-        if line.strip():
-            u, v = map(int, line.split())
+        line = line.strip()
+        if line:
+            parts = line.split('-')
+            if len(parts) != 2:
+                raise ValueError("Invalid edge format")
+            u, v = int(parts[0].strip()), int(parts[1].strip())
             parsed.append((u, v))
             max_v = max(max_v, u, v)
     n = max_v + 1 if max_v >= 0 else 0
@@ -396,7 +402,7 @@ with st.sidebar:
     st.markdown("---")
     
     edges_input = st.text_area(
-        "Edges (u v per line, zero-indexed)",
+        "Edges (u-v per line, zero-indexed)",
         key="edges_input_val",
         height=250,
         on_change=on_edges_change
@@ -429,6 +435,23 @@ edges_tuple = tuple(edges)
 G = nx.Graph()
 G.add_nodes_from(range(num_vertices))
 G.add_edges_from(edges)
+
+is_tree = False
+tree_warning = ""
+if num_vertices > 0:
+    has_self_loops = any(u == v for u, v in edges)
+    has_duplicate_edges = len({tuple(sorted(e)) for e in edges}) != len(edges)
+    if has_self_loops:
+        tree_warning = "⚠️ **Warning:** The current graph is **not a tree** (contains self-loop(s))."
+    elif has_duplicate_edges:
+        tree_warning = "⚠️ **Warning:** The current graph is **not a tree** (contains duplicate edge(s))."
+    elif not nx.is_tree(G):
+        if not nx.is_connected(G):
+            tree_warning = "⚠️ **Warning:** The current graph is **not a tree** (graph is disconnected / has isolated vertices)."
+        else:
+            tree_warning = "⚠️ **Warning:** The current graph is **not a tree** (contains cycle(s))."
+    else:
+        is_tree = True
 
 # Calculate standard parameter-based theoretical res
 theoretical_res = get_theoretical_res(edges, num_vertices)
@@ -463,6 +486,8 @@ html_code = generate_visualgo_svg(
 )
 
 with graph_container:
+    if tree_warning:
+        st.warning(tree_warning)
     if not is_valid_labeling and res_value != -1:
         st.error(error_msg)
     elif res_value == -1:
